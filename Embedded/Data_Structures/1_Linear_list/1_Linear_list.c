@@ -92,9 +92,6 @@ int findElem(SeqList *L, ElemType e) {
     return 0;
 }
 
-// 顺序表-动态分配内存地址初始化
-
-
 int main(int argc, char const *argv[]) {
     (void)argc;
     (void)argv;
