@@ -28,6 +28,24 @@ Release/
 *.dylib
 *.dll
 
+# ===== Keil MDK / 嵌入式工具链 =====
+Listings/
+Objects/
+*.uvguix.*
+JLinkLog.txt
+*.map
+*.axf
+*.lnp
+*.dep
+*.iex
+*.crf
+*.lst
+*.scvd
+
+# ===== AI 工具本地状态 =====
+.omo/
+.reasonix/
+
 # ===== 编辑器 / 工具 =====
 .workbuddy/
 .vscode/
