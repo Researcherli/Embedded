@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "boot_partition.h"
 
 /* 识别魔数 (ASCII "BOOT" 的小端表示)，表示参数区已经被有效初始化 */
@@ -26,26 +27,40 @@ typedef enum {
 } upgrade_state_enum;
 
 /*
- * 参数结构体：固定 52 字节，自然 4 字节对齐，无填充空洞
+ * 单个 App 槽的镜像描述
+ * A/B 两槽各存一份，切换槽位后各自独立校验，互不影响
+ */
+typedef struct {
+    uint32_t fw_size;            /* 该槽内固件的实际字节数，0 表示该槽为空 */
+    uint32_t fw_crc32;           /* 该槽内固件镜像的 CRC32 */
+    uint32_t fw_version;         /* 该槽固件版本号，例如 0x010002 表示 v1.0.2 */
+    uint32_t fw_flags;           /* 预留：镜像状态标志（已验证 / 待验证等） */
+} boot_slot_info_t;
+
+/*
+ * 参数结构体：固定 64 字节，自然 4 字节对齐，无填充空洞
  * 必须与 Flash 中已经存在的旧数据保持二进制兼容，改动需同步版本升级策略
  */
 typedef struct {
     uint32_t magic;              /* 魔数: 0x544F4F42 */
-    uint32_t seq_num;            /* 递增序列号，用于在双备份中挑选最新一份 */
+    uint32_t seq_num;            /* 递增序列号，用于在日志中挑选最新一份 */
 
     uint8_t  active_slot;        /* 当前激活执行的分区 (boot_slot_enum) */
     uint8_t  upgrade_state;      /* 当前升级流程状态 (upgrade_state_enum) */
     uint8_t  boot_fail_count;    /* 连续启动失败计数器 */
     uint8_t  reserved1;          /* 预留字节，补齐 4 字节对齐 */
 
-    uint32_t fw_size;            /* 待校验/激活槽内固件的实际字节大小 */
-    uint32_t fw_crc32;           /* 待校验/激活槽内固件镜像的整体 CRC32 */
-    uint32_t fw_version;         /* 固件版本号，例如 0x010002 表示 v1.0.2 */
+    boot_slot_info_t slot[2];    /* [0]=App-A, [1]=App-B，下标与 boot_slot_enum 一致 */
 
-    uint32_t reserved[6];        /* 预留字段，为日后扩展保留空间 */
+    uint32_t reserved[4];        /* 预留字段，为日后扩展保留空间 */
 
     uint32_t param_crc32;        /* 本结构体自身的 CRC32 (从 magic 算到 reserved 尾部) */
 } boot_param_t;
+
+/* 取某个槽的镜像描述，例：PARAM_SLOT_INFO(&param, SLOT_APP_B).fw_crc32 */
+#define PARAM_SLOT_INFO(p, s)       ((p)->slot[(uint32_t)(s)])
+/* 取当前激活槽的镜像描述 */
+#define PARAM_ACTIVE_INFO(p)        PARAM_SLOT_INFO((p), (p)->active_slot)
 
 
 /* =========================================================================
@@ -71,8 +86,14 @@ typedef struct {
 #define PARAM_SLOTS_PER_REGION      (PARAM_REGION_SIZE / PARAM_SLOT_SIZE) /* 128 */
 
 /* 结构体布局锁定：任何字段变动都会让 Flash 中的旧参数校验失败 */
-_Static_assert(sizeof(boot_param_t) == 52U,
+_Static_assert(sizeof(boot_slot_info_t) == 16U,
+               "boot_slot_info_t layout changed");
+_Static_assert(sizeof(boot_param_t) == 64U,
                "boot_param_t layout changed, on-flash format would break");
+_Static_assert(offsetof(boot_param_t, slot) == 12U,
+               "boot_param_t.slot must start at offset 12");
+_Static_assert(offsetof(boot_param_t, param_crc32) == 60U,
+               "boot_param_t.param_crc32 must be the last field at offset 60");
 _Static_assert((sizeof(boot_param_t) % 4U) == 0U,
                "boot_param_t size must be a multiple of 4 for word programming");
 _Static_assert(sizeof(boot_param_t) <= PARAM_SLOT_SIZE,

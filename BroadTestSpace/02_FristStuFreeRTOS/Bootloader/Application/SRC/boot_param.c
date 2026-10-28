@@ -77,13 +77,27 @@ static const uint32_t g_crc32_table[256] = {
     0xB40BBE37U, 0xC30C8EA1U, 0x5A05DF1BU, 0x2D02EF8DU,
 };
 
-static uint32_t soft_crc32(const uint8_t *data, uint32_t length)
+/**
+ * @brief CRC32 增量计算：可分段喂入，用于校验无法一次性缓冲的固件镜像
+ * @param crc    上一次的返回值；首次调用传 0xFFFFFFFFU
+ * @param data   本段数据起始地址
+ * @param length 本段字节数
+ * @return 中间结果；全部喂完后取反才得到最终 CRC
+ */
+static uint32_t crc32_update(uint32_t crc, const uint8_t *data, uint32_t length)
 {
-    uint32_t crc = 0xFFFFFFFFU;
     while (length--) {
         crc = (crc >> 8) ^ g_crc32_table[(crc ^ *data++) & 0xFFU];
     }
-    return ~crc;
+    return crc;
+}
+
+/**
+ * @brief 一次性计算 CRC32
+ */
+static uint32_t soft_crc32(const uint8_t *data, uint32_t length)
+{
+    return ~crc32_update(0xFFFFFFFFU, data, length);
 }
 
 /**
@@ -323,9 +337,8 @@ bool boot_param_init(boot_param_t *param)
     param->active_slot     = SLOT_APP_A;
     param->upgrade_state   = UPGRADE_STATE_IDLE;
     param->boot_fail_count = 0;
-    param->fw_size         = 0;
-    param->fw_crc32        = 0;
-    param->fw_version      = 0x010000;             /* 默认版本 v1.0.0 */
+    /* memset 已清零，只需给出 A 槽的默认版本；B 槽出厂为空 */
+    PARAM_SLOT_INFO(param, SLOT_APP_A).fw_version = 0x010000;   /* v1.0.0 */
 
     if (!boot_param_write(param)) {
         return false;
