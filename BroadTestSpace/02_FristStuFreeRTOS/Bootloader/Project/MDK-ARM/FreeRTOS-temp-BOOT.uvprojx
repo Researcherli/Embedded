@@ -674,11 +674,6 @@
               <FileType>5</FileType>
               <FilePath>..\..\..\Common\Inc\boot_param.h</FilePath>
             </File>
-                      <File>
-              <FileName>boot_crc32.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\..\..\Common\Inc\boot_crc32.h</FilePath>
-            </File>
             <File>
               <FileName>boot_image.h</FileName>
               <FileType>5</FileType>
