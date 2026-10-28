@@ -1,4 +1,7 @@
-# FreeRTOS list 学习记录
+# FreeRTOS list 学习记录（优化版）
+
+> 本笔记基于 **FreeRTOS Kernel V11.3.0** 的 `list.c` / `list.h` 逐行核对整理。
+> 配套笔记：`task.md`（tasks.c 全模块精解）——链表是它的地基，建议按 list → task 顺序阅读。
 
 ------
 
@@ -15,6 +18,8 @@
 > - **`pxContainer`**：归属标记，`NULL` = 游离，删除时 O(1) 反查。
 
 把这四个角色记住，整个 list 就通了。后面所有代码都是"**在环上接线/拆线**"。
+
+**为什么 RTOS 内核这么依赖它**：`tasks.c` 里"任务的状态"不是用状态变量记录的，而是**用"你挂在哪条链表上"来表达的**——在就绪链表 = Ready，在延时链表 = Blocked，在挂起链表 = Suspended。所以把 list 吃透，tasks.c 的调度逻辑就读懂了一半。
 
 ------
 
@@ -70,6 +75,8 @@ typedef struct xLIST
 | `pvOwner`               | `ListItem_t` | 拥有者（如 TCB 指针），业务用                      |
 | `pxContainer`           | `ListItem_t` | 所属链表，`NULL` = 游离，删除时反查用              |
 
+> **V11 新变化 `configUSE_MINI_LIST_ITEM`**：V11 起哨兵是否用精简版变得**可配置**（默认 1 = 用精简版省内存）。若设为 0，`xListEnd` 会退化为完整版 `ListItem_t`（`MiniListItem_t` 被 typedef 成 `ListItem_t`），哨兵的 `pvOwner`/`pxContainer` 在 `vListInitialise` 里被显式置 `NULL`。这是为了照顾某些内核感知调试器和 MISRA 一致性检查。**对理解原理无影响**，读 V10 老教程的人也不用慌。
+
 ### 1.2 为什么定义两个节点类型
 
 | 类型                       | 字段                                       | 用途                           |
@@ -77,9 +84,11 @@ typedef struct xLIST
 | `ListItem_t`（完整版）     | 值 + next/prev + `pvOwner` + `pxContainer` | 真实节点，记录拥有者和归属链表 |
 | `MiniListItem_t`（精简版） | 值 + next/prev                             | 哨兵专用，**省 2 个指针内存**  |
 
-> FreeRTOS 里链表极多（每个任务、每个队列都有），省这点内存累积起来很可观。
+> FreeRTOS 里链表极多（每个任务带 2 个节点、每条就绪链表带 1 个哨兵、每个队列/信号量都有等待链表……），省这点内存累积起来很可观。
 >
-> `pxIndex` 必须声明为 `ListItem_t *`（要指向真实节点），初始指向哨兵时靠**强转**——因为两者**前 3 个字段内存布局一致**，游标只访问这些公共字段，不碰精简版没有的 `pvOwner`/`pxContainer`。这是 C 语言常见的"**结构体前缀兼容**"技巧。
+> `pxIndex` 必须声明为 `ListItem_t *`（要指向真实节点），初始指向哨兵时靠**强转**——因为两者**前几个字段内存布局一致**（排序键 + 两个方向指针），游标只访问这些公共字段，不碰精简版没有的 `pvOwner`/`pxContainer`。这是 C 语言常见的"**结构体前缀兼容**"技巧。
+>
+> 补充一个细节：即使开了 `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES`（完整性校验字节），校验字段在两种结构体里的位置也一致，前缀兼容依然成立。
 
 ### 1.3 核心宏（省略注释）
 
@@ -103,7 +112,21 @@ typedef struct xLIST
 #define listLIST_IS_INITIALISED( pxList )                 ( ( pxList )->xListEnd.xItemValue == portMAX_DELAY )
 ```
 
-> **轮转遍历宏**（单核版）：`pxIndex` 往后走一步，遇到哨兵就绕回真正的表头，然后取 `pvOwner`。
+> **读宏的小技巧**：`listGET_HEAD_ENTRY` 取的是 `xListEnd.pxNext`，即**逻辑表头**；`listGET_END_MARKER` 取的是哨兵地址本身，当**遍历终止条件**用。`tasks.c` 里大量出现 `for( pxIterator = listGET_HEAD_ENTRY(pxList); pxIterator != listGET_END_MARKER(pxList); pxIterator = listGET_NEXT(pxIterator) )` 这种"从表头走到哨兵"的标准遍历写法，先在这里混个眼熟。
+
+> **task.c 里的三个"别名"宏**（`list.h` 定义，`tasks.c` 高频使用，读 task 笔记前必须认识）：
+
+```c
+#define listINSERT_END( pxList, pxListItem )      vListInsertEnd( ( pxList ), ( pxListItem ) )   /* 尾插(挂到pxIndex前) */
+#define listINSERT_SORTED( pxList, pxListItem )   vListInsert( ( pxList ), ( pxListItem ) )      /* 按值排序插入 */
+#define listREMOVE_ITEM( pxListItem )             uxListRemove( ( pxListItem ) )                 /* 摘除节点 */
+```
+
+> 它们只是换了名字的函数调用。`tasks.c` 里的 `listINSERT_END( &pxReadyTasksLists[prio], &pxTCB->xStateListItem )`、`listREMOVE_ITEM( &pxTCB->xStateListItem )` 全部对应本文第 4、5 章的函数。
+
+### 1.4 轮转遍历宏（单核版）
+
+> `pxIndex` 往后走一步，遇到哨兵就绕回真正的表头，然后取 `pvOwner`。
 
 ```c
 #if ( configNUMBER_OF_CORES == 1 )
@@ -119,6 +142,10 @@ typedef struct xLIST
     } while( 0 )
 #endif
 ```
+
+> **这个宏是 FreeRTOS 时间片轮转的心脏**：每次上下文切换时对就绪链表调一次，`pxIndex` 依次往后挪，同优先级的任务就轮流上台。遇到哨兵自动跳过（绕回表头），所以哨兵永远不会被"选中运行"。
+>
+> 它还有一个重要副作用：**`vListInsertEnd` 把新节点插在 `pxIndex` 前，正好是"下一次轮转最后才轮到"的位置**——这两者配合，才有了 FIFO 公平语义。第 4 章会再强调。
 
 ------
 
@@ -142,7 +169,7 @@ void vListInitialise( List_t * const pxList )
     /* 节点计数归零 */
     pxList->uxNumberOfItems = ( UBaseType_t ) 0U;
 
-    /* ... 完整性校验、trace 等可选操作省略 ... */
+    /* ... 完整性校验、configUSE_MINI_LIST_ITEM==0 时哨兵 owner/container 置 NULL 等可选操作省略 ... */
 }
 ```
 
@@ -213,7 +240,7 @@ pxList->pxIndex = ( ListItem_t * ) &( pxList->xListEnd );
 | 找"最后一个"   | 遍历到尾再判                   | `xListEnd.pxPrevious` 直接就是          |
 | 排序插入防越界 | 判 `next == NULL`              | `xListEnd` 值设为最大，循环永远能停     |
 
-> 哨兵不是为了功能，是为了让代码**简单、无分支、实时性确定**（RTOS 最怕不可预测的分支）。
+> 哨兵不是为了功能，是为了让代码**简单、无分支、实时性确定**（RTOS 最怕不可预测的分支和耗时）。
 
 ### 2.4 初始化后的完整图景
 
@@ -258,7 +285,7 @@ void vListInitialiseItem( ListItem_t * const pxItem )
 - `pxContainer` 记录"我挂在哪条链表上"：`NULL` = 游离，`pxList` = 已挂载。
 - **为什么必须置 NULL（防御性初始化）**：
   1. 节点内存初始是垃圾值，不置 NULL 后续删除会拿**野指针**访问链表，崩溃或踩内存。
-  2. NULL 是"游离"的**唯一标准表示**，所有代码靠它判断节点是否在链表上。
+  2. NULL 是"游离"的**唯一标准表示**，所有代码靠它判断节点是否在链表上（`vTaskDelete`、`eTaskGetState` 等都靠 `listLIST_ITEM_CONTAINER()` 判 NULL）。
   3. 节点可复用：插入→删除→再插入，状态始终干净。
 
 > **注意**：这个函数**不初始化** `pxNext`/`pxPrevious`/`xItemValue`。前者插入时才设，后者是用户数据（排序键），FreeRTOS 不该替用户覆盖。
@@ -274,6 +301,8 @@ vListInsert( &xList, &xItem );   // ③ pxContainer = &xList，挂载；四步�
 // ... 节点在链表里 ...
 uxListRemove( &xItem );          // ④ pxContainer = NULL，回到游离
 ```
+
+> 在 `tasks.c` 里，一个任务天生带两个节点（`xStateListItem` 状态节点 + `xEventListItem` 事件节点），创建时双双走一遍这个生命周期。**同一个节点同一时刻只能在一条链表上**——所以一个任务的"状态节点"和"事件节点"可以同时挂在两条不同的链表上（"一脚踏两船"），这是 task.md 模块 8 的核心戏码。
 
 ### 3.4 小结
 
@@ -298,7 +327,7 @@ FreeRTOS 有两种插入：`vListInsertEnd`（固定插表尾）和 `vListInsert
 
 **唯一的硬约束**：**先读旧后继（B），再改 A.next**。否则 A.next 被覆盖后，就找不到 B 了。
 
-### 4.1 `vListInsertEnd` —— 插到表尾
+### 4.1 `vListInsertEnd` —— 插到 `pxIndex` 前（等价于表尾）
 
 ```c
 void vListInsertEnd( List_t * const pxList, ListItem_t * const pxNewListItem )
@@ -335,7 +364,7 @@ void vListInsertEnd( List_t * const pxList, ListItem_t * const pxNewListItem )
 
 **空表也成立**：空表时 `pxIndex = &xListEnd`，`xListEnd.pxPrevious = &xListEnd`（自环），代入四步得到 `E ⇄ N ⇄ E`，天然成立，**不需要特判空表**。
 
-**语义**：不是排序插入，而是把新节点插在 `pxIndex` 前，使其成为 `listGET_OWNER_OF_NEXT_ENTRY()` **最后**才会遍历到的节点。就绪列表用它实现同优先级任务的**轮转公平**。
+**语义（重点）**：它的准确语义是**"把 N 插在 `pxIndex` 前面"**，让 N 成为 `listGET_OWNER_OF_NEXT_ENTRY()` **最后**才会遍历到的节点。由于内核使用中 `pxIndex` 几乎总停在哨兵上（每次遍历宏都会把它挪走又绕回），**实际效果 = 插在逻辑表尾 = FIFO**。就绪列表用它实现同优先级任务的**轮转公平**。这也是它名字里叫 `End` 的由来——不是"插到哨兵后面"，而是"成为逻辑上的最后一个"。
 
 ### 4.2 `vListInsert` —— 按值排序插入
 
@@ -386,7 +415,7 @@ void vListInsert( List_t * const pxList, ListItem_t * const pxNewListItem )
 1. **`<=` 而不是 `<`**：相同值时新节点插在已有节点**后面**。就绪列表里同优先级任务值相同，新任务插后面，**大家轮流分享 CPU**，实现公平调度。
 2. **`portMAX_DELAY` 特判**：哨兵值也是 `portMAX_DELAY`，若新值等于最大值，`<=` 条件对哨兵也成立，循环会**死循环**。所以直接定位到 `xListEnd.pxPrevious`，跳过循环。
 
-> 那段大注释是在提醒："如果代码卡死在这里，常见原因是栈溢出、中断优先级配置错误、在临界区/挂起调度器时调用 API、队列/信号量未初始化就用、tick 中断优先级过高"——本质是**调用者违反了 FreeRTOS 使用规则**导致链表被踩坏。
+> 那段大注释是在提醒："如果代码卡死在这里，常见原因是栈溢出、中断优先级配置错误、在临界区/挂起调度器时调用 API、队列/信号量未初始化就用、tick 中断优先级过高"——本质是**调用者违反了 FreeRTOS 使用规则**导致链表被踩坏。源码里的空 `for` 循环体上方就写着一行大写提示：`IF YOU FIND YOUR CODE STUCK HERE, SEE THE NOTE JUST ABOVE.`
 
 ### 4.3 四步顺序对比（重要）
 
@@ -407,10 +436,10 @@ void vListInsert( List_t * const pxList, ListItem_t * const pxNewListItem )
 |          | `vListInsertEnd`              | `vListInsert`                          |
 | -------- | ----------------------------- | -------------------------------------- |
 | 插入位置 | 固定插在 `pxIndex` 前（表尾） | 按 `xItemValue` **升序**找位置         |
-| 找位置   | 不需要                        | for 循环遍历                           |
+| 找位置   | 不需要，O(1)                  | for 循环遍历，O(n)，n = 链上节点数     |
 | 特殊处理 | 无                            | 值 == `portMAX_DELAY` 特判，防死循环   |
 | 相同值   | 插在 `pxIndex` 前             | 插在已有相同值**后面**（`<=`），保公平 |
-| 典型用途 | 就绪列表                      | 延时列表（按唤醒时间排序）             |
+| 典型用途 | 就绪列表（FIFO 轮转）         | 延时列表（按唤醒时间排序）、事件等待表（按优先级排序） |
 
 ### 4.5 完整示例：`E ⇄ A ⇄ E` 插入 N
 
@@ -464,7 +493,7 @@ UBaseType_t uxListRemove( ListItem_t * const pxItemToRemove )
 
 **① 从节点反查链表**
 
-> 靠 `pxContainer`（插入时记录的"我属于哪条链表"），节点自己就知道链表在哪，**不需要调用者传链表指针**。这就是记录 `pxContainer` 的价值——O(1) 快速反查。
+> 靠 `pxContainer`（插入时记录的"我属于哪条链表"），节点自己就知道链表在哪，**不需要调用者传链表指针**。这就是记录 `pxContainer` 的价值——O(1) 快速反查。这也解释了为什么函数签名里只有节点没有链表。
 
 **②③ 让前后邻居互连（核心两步）**
 
@@ -519,7 +548,7 @@ UBaseType_t uxListRemove( ListItem_t * const pxItemToRemove )
 
 ------
 
-## 6. 插入与删除对比
+## 6. 插入与删除对比 + 复杂度速查
 
 |            | 插入                       | 删除                         |
 | ---------- | -------------------------- | ---------------------------- |
@@ -528,6 +557,19 @@ UBaseType_t uxListRemove( ListItem_t * const pxItemToRemove )
 | 特判       | `portMAX_DELAY` 防死循环   | `pxIndex` 是否指向被删节点   |
 | 计数       | +1                         | -1                           |
 | 返回       | void                       | 剩余节点数                   |
+
+**时间复杂度一览**（这也是内核敢把链表当状态机用的底气）：
+
+| 操作                                       | 复杂度        | 说明                                     |
+| ------------------------------------------ | ------------- | ---------------------------------------- |
+| `vListInitialise` / `vListInitialiseItem`  | O(1)          | 纯赋值                                   |
+| `vListInsertEnd`                           | O(1)          | 不找位置，四步接线                       |
+| `vListInsert`                              | **O(n)**      | 要按值找位置；延时表按唤醒时间有序故插入 |
+| `uxListRemove`                             | O(1)          | 靠 `pxContainer` 反查，邻居互连          |
+| `listGET_OWNER_OF_NEXT_ENTRY`              | O(1)          | 游标走一步                               |
+| `listGET_OWNER_OF_HEAD_ENTRY` / 取表长等   | O(1)          | 直接读字段                               |
+
+> 唯一的 O(n) 是排序插入，而它最重的用途（延时表）里链表按唤醒时间有序、且 tick 到期时**只从表头摘**，整体依然高效。
 
 ------
 
@@ -538,6 +580,14 @@ FreeRTOS 链表 = **循环双向链表 + 哨兵节点**。建立这个心智模�
 - **插入** = 往环里加一节；
 - **删除** = 从环里摘一节；
 - **哨兵** = 环上永远不动的那节"锚点"。
+
+```mermaid
+flowchart LR
+    subgraph 环上的操作
+    A["插入 vListInsert / InsertEnd<br/>= 四步接线"] --> B((环 + 哨兵))
+    B --> C["删除 uxListRemove<br/>= 邻居互连两步拆线"]
+    end
+```
 
 **防晕三问**（看链表代码时先问自己）：
 
@@ -554,7 +604,38 @@ FreeRTOS 链表 = **循环双向链表 + 哨兵节点**。建立这个心智模�
 
 ------
 
-## 8. 附：易混淆点速查
+## 8. 与 tasks.c 的衔接（学完 list 看这里再进 task）
+
+链表机制本身只有 4 个函数 + 一堆宏，但它被 `tasks.c` 用出了两种"语义"。提前知道这两点，读 task 笔记时不会懵：
+
+**① 同一个 `xItemValue` 字段，两种含义（由调用者赋值）**：
+
+| 挂在哪条链表               | `xItemValue` 存什么            | 插入方式          | 排序效果                     |
+| -------------------------- | ------------------------------ | ----------------- | ---------------------------- |
+| 状态链表（就绪/延时/挂起） | **唤醒时刻**（Tick 绝对时间）  | `vListInsert`     | 延时表按"谁先醒"升序         |
+| 状态链表（就绪表）         | 无所谓（FIFO，不按它排序）     | `vListInsertEnd`  | 同优先级任务排队轮转         |
+| 事件链表（队列等待表等）   | **`configMAX_PRIORITIES - 优先级`** | `vListInsert` | 值越小 = 优先级越高 → 排最前 |
+
+> 注意事件表的"补数"技巧：`vListInsert` 是**升序**排列，而我们要"优先级最高的排最前"，于是存 `MAX - 优先级` 把大小关系倒过来。这解释了 TCB 里为什么有两个 `ListItem_t`：**状态节点**管"你现在睡到几点/排哪个队"，**事件节点**管"你在等的事件里你排第几"。
+
+**② `listGET_OWNER_OF_NEXT_ENTRY` 就是时间片轮转**：
+
+每次上下文切换，内核选出最高优先级的就绪链表后，对该链表调一次这个宏——`pxIndex` 后移一格取任务。同优先级有 3 个任务时，三次切换正好各轮到一次，这就是"时间片轮转"的全部实现，没有任何额外代码。
+
+**③ SMP 构建下的两个小变化（读 task 笔记延伸篇 B 前的预告）**：
+
+V11.3 的 SMP 构建（`configNUMBER_OF_CORES > 1`）改变了 tasks.c"怎么用链表"，链表本身一寸没改：
+
+| 变化点 | 单核（前文视角） | SMP 构建 |
+| ------ | ---------------- | -------- |
+| 运行任务在不在就绪表 | 在（游标轮转依赖它） | 也在；但扫描选人时，挂在**别的核**上跑的候选会被跳过 |
+| 同优先级下一个跑谁 | `listGET_OWNER_OF_NEXT_ENTRY` 游标后移 | 改为显式扫描 + 选人前把本核当前任务挪到队尾 |
+
+> 结论：链表四件套的用法不变，变的只是 tasks.c 怎么"点名"。多核部分详见 task 笔记延伸篇 B。
+
+------
+
+## 9. 附：易混淆点速查
 
 | 易混点                           | 澄清                                                         |
 | -------------------------------- | ------------------------------------------------------------ |
@@ -566,3 +647,10 @@ FreeRTOS 链表 = **循环双向链表 + 哨兵节点**。建立这个心智模�
 | 为什么 `<=` 不是 `<`             | 相同值后插，保证同优先级任务公平轮转                         |
 | 为什么特判 `portMAX_DELAY`       | 哨兵值也是 MAX，`<=` 对哨兵成立会死循环，直接插表尾          |
 | 删除后 next/prev 是脏值          | 刻意不清（省开销），但**不能再读**                           |
+| `listINSERT_END` 是新函数？      | 不是，是 `vListInsertEnd` 的别名宏（`tasks.c` 常用）         |
+| 精简版哨兵一定存在？             | V11 起由 `configUSE_MINI_LIST_ITEM` 决定，默认 1；设 0 则哨兵是完整节点 |
+| `uxNumberOfItems` 含哨兵吗？     | 不含，只数真实节点。`listLIST_IS_EMPTY` 靠它判 0             |
+
+
+---
+*AI生成*
