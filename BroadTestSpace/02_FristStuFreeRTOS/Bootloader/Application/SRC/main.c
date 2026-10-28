@@ -89,15 +89,23 @@ int main(void)
         boot_fatal(BOOT_FATAL_PARAM_UNAVAILABLE);
     }
 
-    /* 校验当前激活槽的镜像，不可用则累加计数或回滚（内部不返回） */
+    /* 校验当前激活槽的镜像 */
     boot_image_status_t st = boot_image_verify(&g_boot_param,
                                                (boot_slot_enum)g_boot_param.active_slot);
-    if (st != IMAGE_OK) {
+    g_active_image_status = st;
+
+    if (st == IMAGE_EMPTY) {
+        /* 当前槽没有固件（出厂状态，或刚被擦除）——这是正常的"等待升级"状态，
+         * 不参与 boot_fail_count 计数，直接进入下面的 USB 等待上位机下发固件。
+         * 若把它也算作失败，出厂首次上电就会连续复位三次后停机。 */
+    } else if (st != IMAGE_OK) {
+        /* 槽里有固件但损坏（CRC 不符 / 长度非法）：走失败计数与回滚（内部不返回） */
         boot_handle_image_failure(st);
     }
 
-    /* 校验通过。第三段在这里接管：设置向量表偏移并跳转到 App。
-     * 在那之前先停在 USB 循环，方便确认前两段的行为。 */
+    /* 走到这里表示：镜像校验通过，或者当前槽为空等待升级。
+     * 第三段在这里接管：镜像有效时设置向量表偏移并跳转到 App。 */
+
     systick_init();
     usb_init();
 
