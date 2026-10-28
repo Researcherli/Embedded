@@ -49,34 +49,41 @@ typedef struct {
 
 
 /* =========================================================================
- * 参数区物理布局：Sector 12 / 13 两个独立 16KB 扇区做乒乓备份
+ * 参数区物理布局：两个 16KB 扇区交替作为「追加式日志」，S14~S16 留作扩展
  *
- *   Slot 0 : 0x08100000 (Sector 12)  <- 一份完整参数
- *   Slot 1 : 0x08104000 (Sector 13)  <- 另一份完整参数
+ *   Region A : 0x08100000 (Sector 12)
+ *   Region B : 0x08104000 (Sector 13)
  *
- * 写入时只擦除"较旧"的那一份所在扇区，另一份全程保持有效。
- * 因此掉电最多损失最后一次写入，不会退回到出厂默认值。
- * Sector 14 ~ 16 暂未使用，留作参数区后续扩展（日志、多版本备份等）。
+ * 写入采用追加（append-only）：每次写占用一个空槽，不擦除任何旧槽。
+ * 当前区写满后，切换到另一区并从槽 0 重新开始，切换前先擦除目标区——
+ * 此时目标区必然不含最新数据，因此擦除期间另一区始终完整。
+ *
+ * 相比"每次写都擦扇区"的乒乓备份：
+ *   - 掉电安全：任意时刻至少有一个区保存着完整的最新参数；
+ *   - 擦除次数从"每次写一次"降到"每 128 次写一次"，显著延长扇区寿命。
  * ========================================================================= */
-#define PARAM_SLOT_SIZE             0x4000U                             /* 16 KB，物理擦除单位 */
-#define PARAM_SLOT_0_ADDR           (PART_PARAM_ADDR)                   /* 0x08100000 */
-#define PARAM_SLOT_1_ADDR           (PART_PARAM_ADDR + PARAM_SLOT_SIZE) /* 0x08104000 */
+#define PARAM_REGION_SIZE           0x4000U                             /* 16 KB，单区 = 一个物理扇区 */
+#define PARAM_REGION_A_ADDR         (PART_PARAM_ADDR)                   /* 0x08100000 */
+#define PARAM_REGION_B_ADDR         (PART_PARAM_ADDR + PARAM_REGION_SIZE) /* 0x08104000 */
 
-/* 单份参数的有效数据长度上限，留足结构体后续扩展余量 */
-#define PARAM_DATA_MAX_SIZE         512U
+/* 单个数据槽大小：boot_param_t 目前 52 字节，留出扩展余量 */
+#define PARAM_SLOT_SIZE             128U
+#define PARAM_SLOTS_PER_REGION      (PARAM_REGION_SIZE / PARAM_SLOT_SIZE) /* 128 */
 
 /* 结构体布局锁定：任何字段变动都会让 Flash 中的旧参数校验失败 */
 _Static_assert(sizeof(boot_param_t) == 52U,
                "boot_param_t layout changed, on-flash format would break");
 _Static_assert((sizeof(boot_param_t) % 4U) == 0U,
                "boot_param_t size must be a multiple of 4 for word programming");
-_Static_assert(sizeof(boot_param_t) <= PARAM_DATA_MAX_SIZE,
-               "boot_param_t exceeds PARAM_DATA_MAX_SIZE");
-_Static_assert(PARAM_SLOT_SIZE >= PARAM_DATA_MAX_SIZE,
-               "parameter slot smaller than one parameter block");
-/* 两个槽必须完整落在 PART_PARAM 分区内，防止调整槽大小或增加备份槽时越界 */
-_Static_assert((PARAM_SLOT_1_ADDR + PARAM_SLOT_SIZE) <= (PART_PARAM_ADDR + PART_PARAM_SIZE),
-               "parameter slots exceed the PART_PARAM area");
+_Static_assert(sizeof(boot_param_t) <= PARAM_SLOT_SIZE,
+               "boot_param_t exceeds one log slot");
+_Static_assert((PARAM_SLOT_SIZE % 4U) == 0U,
+               "slot size must be 4-byte aligned for word programming");
+_Static_assert((PARAM_REGION_SIZE % PARAM_SLOT_SIZE) == 0U,
+               "region size must be an integer multiple of slot size");
+/* 两个日志区必须完整落在 PART_PARAM 分区内 */
+_Static_assert((PARAM_REGION_B_ADDR + PARAM_REGION_SIZE) <= (PART_PARAM_ADDR + PART_PARAM_SIZE),
+               "parameter log regions exceed the PART_PARAM area");
 
 
 /* 函数声明 */
