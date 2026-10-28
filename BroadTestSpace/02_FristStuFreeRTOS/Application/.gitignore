@@ -1,0 +1,124 @@
+# ==============================================================================
+# C/C++ Embedded Project .gitignore
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Build Outputs & Compiled Objects
+# ------------------------------------------------------------------------------
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.exe
+*.out
+*.elf
+*.hex
+*.bin
+*.map
+*.axf
+*.d
+*.dep
+*.crf
+*.lnp
+*.lst
+*.m51
+*.omf
+*.plg
+*.sct
+*.htm
+*.build_log.htm
+
+# Output Directories
+/build/
+/bin/
+/obj/
+/out/
+Project/build/
+Debug/
+Release/
+
+# ------------------------------------------------------------------------------
+# Keil MDK-ARM Specific
+# ------------------------------------------------------------------------------
+*.uvoptx
+*.uvopt
+*.uvguix.*
+*.JLinkScript
+JLinkLog.txt
+*.iex
+*.ini
+*.TMP
+
+# ------------------------------------------------------------------------------
+# EIDE & CMSIS Specific
+# ------------------------------------------------------------------------------
+.eide/
+EIDE/.eide/
+.eide.usr.ctx.json
+EIDE/.eide.usr.ctx.json
+*.ept
+*.eide-template
+.cmsis/
+EIDE/.cmsis/
+EIDE/.pack/
+.clangd/
+
+# ------------------------------------------------------------------------------
+# IDE / Editor (VS Code, Visual Studio, etc.)
+# ------------------------------------------------------------------------------
+.vscode/
+.idea/
+.vs/
+.omo/
+.clang-format
+.clangd/
+.clangd
+*.code-workspace
+*.swp
+*~
+*.bak
+*.tmp
+
+# User-specific workspace files (uncomment to track if shared across team)
+# *.code-workspace
+
+# ------------------------------------------------------------------------------
+# OS Generated
+# ------------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ------------------------------------------------------------------------------
+# AI / agent artifacts
+# ------------------------------------------------------------------------------
+.opencode/
+.sisyphus/
+.codegraph/
+.reasonix/
+.workbuddy/
+AGENTS.md
+reasonix.toml
+
+# ------------------------------------------------------------------------------
+# Exceptions — 以下文件命中上方通配规则但必须跟踪
+# 注意：.gitignore 不支持行内注释，注释必须独占一行，否则会被当成模式的一部分
+# ------------------------------------------------------------------------------
+# emWin 官方库，编译必需
+!Middlewares/emWin/src/*.lib
+# 链接脚本，链接必需
+!Project/MDK-ARM/*.sct
+# Lua 运行时，构建脚本依赖
+!Project/MDK-ARM/script/*.exe
+!Project/MDK-ARM/script/*.dll
+# JLink 调试配置
+!Project/MDK-ARM/JLinkSettings.ini
+# Keil 项目选项（调试器/Flash Download 等配置，团队共享）
+!Project/MDK-ARM/*.uvoptx
