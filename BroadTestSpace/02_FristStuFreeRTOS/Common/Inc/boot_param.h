@@ -74,9 +74,13 @@ _Static_assert(sizeof(boot_param_t) <= PARAM_DATA_MAX_SIZE,
                "boot_param_t exceeds PARAM_DATA_MAX_SIZE");
 _Static_assert(PARAM_SLOT_SIZE >= PARAM_DATA_MAX_SIZE,
                "parameter slot smaller than one parameter block");
+/* 两个槽必须完整落在 PART_PARAM 分区内，防止调整槽大小或增加备份槽时越界 */
+_Static_assert((PARAM_SLOT_1_ADDR + PARAM_SLOT_SIZE) <= (PART_PARAM_ADDR + PART_PARAM_SIZE),
+               "parameter slots exceed the PART_PARAM area");
 
 
 /* 函数声明 */
+bool boot_param_selfcheck(void);
 bool boot_param_init(boot_param_t *param);
 bool boot_param_read(boot_param_t *param);
 bool boot_param_write(const boot_param_t *param);

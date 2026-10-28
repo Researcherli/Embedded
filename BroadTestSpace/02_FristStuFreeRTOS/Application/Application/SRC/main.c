@@ -8,6 +8,12 @@
 #include "usb_driver.h"
 #include "usb_task.h"
 
+/* 分区表编译期校验：App 与 Bootloader 共用同一份分区定义，这里再校验一次。
+ * 若只在 Bootloader 侧实例化，分区表被改坏时 App 仍能静默编过，并算出错误的 VTOR。 */
+STATIC_ASSERT_PARTITION();
+
+STATIC_ASSERT_PARTITION();
+
 /*-----------------------------------------------------------*/
 /*  App 外设初始化（须在调度器启动前调用）                    */
 /*-----------------------------------------------------------*/

@@ -163,11 +163,39 @@ bool boot_param_write(const boot_param_t *param)
 }
 
 /**
+ * @brief 分区表与 BSP 扇区表的交叉自检
+ *
+ * boot_param.h 里的槽地址是手工维护的常量，而 bsp_flash.c 的扇区表是另一份
+ * 完全独立的定义。两处只要有一处改漏，擦写就会落到错误的物理扇区上，而且
+ * 编译器不会报任何错。这里在启动时做一次交叉核对，把这种静默漂移变成明确的失败。
+ *
+ * @return true 表示槽地址与 BSP 扇区划分一致
+ */
+bool boot_param_selfcheck(void)
+{
+    /* 每个槽必须正好覆盖一个完整的 16KB 扇区（地址越界时 BSP 返回 0） */
+    if (flash_sector_size_get(PARAM_SLOT_0_ADDR) != PARAM_SLOT_SIZE) {
+        return false;
+    }
+    if (flash_sector_size_get(PARAM_SLOT_1_ADDR) != PARAM_SLOT_SIZE) {
+        return false;
+    }
+
+    /* 两个槽必须落在不同扇区，否则乒乓退化成"擦一个毁两个" */
+    return (PARAM_SLOT_0_ADDR != PARAM_SLOT_1_ADDR);
+}
+
+/**
  * @brief 参数区初始化检测，若为空则格式化并写入出厂默认值
  */
 bool boot_param_init(boot_param_t *param)
 {
     if (param == NULL) {
+        return false;
+    }
+
+    /* 分区表与 BSP 扇区表不一致时直接拒绝服务：继续读写会擦错扇区 */
+    if (!boot_param_selfcheck()) {
         return false;
     }
 
