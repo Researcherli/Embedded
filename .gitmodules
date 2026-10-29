@@ -1,0 +1,13 @@
+[submodule "DataSpace/A0_FreeRTOS-LTS"]
+	path = DataSpace/A0_FreeRTOS-LTS
+	url = git@github.com:FreeRTOS/FreeRTOS-LTS.git
+	branch = 202604-LTS
+[submodule "DataSpace/A1_mcuboot"]
+	path = DataSpace/A1_mcuboot
+	url = git@github.com:mcu-tools/mcuboot.git
+[submodule "DataSpace/A2_MultiButton"]
+	path = DataSpace/A2_MultiButton
+	url = git@github.com:0x1abin/MultiButton.git
+[submodule "DataSpace/A3_lwrb"]
+	path = DataSpace/A3_lwrb
+	url = git@github.com:MaJerle/lwrb.git
